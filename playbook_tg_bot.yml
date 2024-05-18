@@ -1,0 +1,133 @@
+- hosts: master
+  become: yes
+  tasks:
+    - name: Install PostgreSQL
+      apt:
+        name:
+        - postgresql
+        - postgresql-contrib
+        state: present
+        update_cache: true
+
+    - name: Initialize PostgreSQL database
+      become_user: postgres
+      postgresql_db:
+        name: tg_bot_db
+
+    - name: Create replication user
+      become_user: postgres
+      postgresql_user:
+        name: repl_user
+        password: kali
+        role_attr_flags: REPLICATION,LOGIN
+        state: present
+
+    - name: Create table email
+      become_user: postgres
+      postgresql_query:
+        db: tg_bot_db
+        query: CREATE TABLE IF NOT EXISTS emails( id serial PRIMARY KEY,email VARCHAR (100) NOT NULL)
+
+    - name: Create table phone_numbers
+      become_user: postgres
+      postgresql_query:
+        db: tg_bot_db
+        query: CREATE TABLE IF NOT EXISTS phone_numbers( id serial PRIMARY KEY,phone_number VARCHAR (15) NOT NULL)
+
+    - name: Configure PostgreSQL for replication
+      become_user: postgres
+      lineinfile:
+        path: /etc/postgresql/14/main/postgresql.conf
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+      loop:
+        - { regexp: "^hot_standby =", line: "hot_standby = on"}
+        - { regexp: "^#listen_addresses =", line: "listen_addresses = '*'"}
+        - { regexp: "^#archive_mode =", line: "archive_mode = on"}
+        - { regexp: "^#archive_command =", line: "archive_command = 'cp %p /oracle/pg_data/archive/%f'"}
+        - { regexp: "^#max_wal_senders =", line: "max_wal_senders = 10"}
+        - { regexp: "^#wal_level =", line: "wal_level = replica"}
+        - { regexp: "^#wal_log_hints =", line: "wal_log_hints = on"}
+
+    - name: Create oracle/pg_data/archive directory
+      file:
+        path: /oracle/pg_data/archive
+        state: directory
+
+    - name: Configure PostgreSQL authentication
+      become_user: postgres
+      lineinfile:
+        path: /etc/postgresql/14/main/pg_hba.conf
+        line: "host replication repl_user 192.168.6.0/24 md5"
+
+    - name: Chown oracle directory
+      shell:
+        cmd: chown -R postgres:postgres /oracle/pg_data/archive/
+
+    - name: Restart PostgreSQL
+      systemd:
+        state: restarted
+        daemon_reload: yes
+        name: postgresql
+
+- hosts: slave
+  become: yes
+  tasks:
+    - name: Install PostgreSQL
+      apt:
+        name:
+        - postgresql
+        - postgresql-contrib
+        state: present
+        update_cache: true
+
+    - name: Configure PostgreSQL for replication
+      become_user: postgres
+      lineinfile:
+        path: /etc/postgresql/14/main/postgresql.conf
+        regexp: ^#listen_addresses =
+        line: listen_addresses = 'localhost, 192.168.6.148'
+
+    - name: Stop PostgreSQL
+      shell:
+        cmd: service postgresql stop
+
+    - name: Clear Postgre Folder
+      shell:
+        cmd: rm -rf /var/lib/postgresql/14/main
+
+    - name: Set replica password
+      shell:
+        cmd: export PGPASSWORD=kali
+
+    - name: Check for replication
+      shell: pg_basebackup -R -h 192.168.1.148 -U repl_user -D /var/lib/postgresql/14/main -P
+      environment:
+        PGPASSWORD: kali
+
+    - name: Start PostgreSQL
+      shell:
+        cmd: service postgresql start
+
+- hosts: bot
+  become: yes
+  tasks:
+    - name: Clone Telegram bot repository
+      git:
+        repo: https://github.com/NastasiaAtamanchukA/for_four_task_pt
+        dest: /opt/tg-bot
+        force: yes
+
+    - name: Install Python dependencies
+      pip:
+        requirements: /opt/tg-bot/requirements.txt
+
+    - name: Copy env variables
+      copy:
+        src: .env
+        dest: /opt/tg-bot/
+        mode: 777
+
+    - name: Run bot
+      shell:
+        cmd: python3 /opt/tg-bot/bot.py
