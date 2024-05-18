@@ -1,0 +1,57 @@
+version: '3'
+
+services:
+  bot:
+    build:
+      context: ./bot
+      dockerfile: Dockerfile
+    depends_on:
+      - db
+    environment:
+      TOKEN: $TOKEN
+      RM_HOST: $RM_HOST
+      RM_PORT: $RM_PORT
+      RM_USER: $RM_USER
+      RM_PASSWORD: $RM_PASSWORD
+    env_file:
+        - .env
+    volumes:
+      - db_log:/app/logs
+    restart: always
+
+  db:
+    build:
+      context: ./db
+      dockerfile: Dockerfile
+    environment:
+      POSTGRES_DB: $DB_DATABASE
+      POSTGRES_USER: $DB_USER
+      POSTGRES_PASSWORD: $DB_PASSWORD
+    env_file:
+        - .env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - db_log:/var/log/postgresql/
+    ports:
+      - "${DB_PORT}:5432"
+    restart: always
+
+  db_replica:
+    build:
+      context: ./db_repl
+      dockerfile: Dockerfile
+    depends_on:
+      - db
+    environment:
+      DB_HOST: ${DB_REPL_HOST}
+      DB_PORT: ${DB_REPL_PORT}
+      DB_NAME: $DB_DATABASE
+      DB_USER: ${DB_REPL_USER}
+      DB_PASSWORD: ${DB_REPL_PASSWORD}
+    env_file:
+        - .env
+    restart: always
+
+volumes:
+  pgdata:
+  db_log: {}
